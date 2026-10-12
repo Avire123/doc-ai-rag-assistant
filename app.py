@@ -101,7 +101,7 @@ if uploaded_files:
 
         if user_query and "vector_store" in st.session_state:
             with st.spinner("Retrieving context and generating answer..."):
-                llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
+                llm = ChatGoogleGenerativeAI(model="gemini-3.8-flash", temperature=0.2)
                 retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k": 3})
 
                 source_docs = retriever.invoke(user_query)
