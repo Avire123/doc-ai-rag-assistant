@@ -88,7 +88,7 @@ if uploaded_files:
         # Vector Store Creation
         if "vector_store" not in st.session_state or st.button("Re-index Documents"):
             with st.spinner("Building local FAISS vector storage..."):
-                embeddings = GoogleGenerativeAIEmbeddings(model="text-embedding-004")
+                embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
                 vector_store = FAISS.from_texts(chunks, embedding=embeddings)
                 st.session_state.vector_store = vector_store
                 st.success("FAISS vector storage successfully updated!")
@@ -101,7 +101,7 @@ if uploaded_files:
 
         if user_query and "vector_store" in st.session_state:
             with st.spinner("Retrieving context and generating answer..."):
-                llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.2)
+                llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
                 retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k": 3})
 
                 source_docs = retriever.invoke(user_query)
