@@ -46,10 +46,24 @@ def extract_text(files):
             for page in reader.pages:
                 combined_text += page.extract_text() or ""
         elif file.name.endswith(".csv"):
-            df = pd.read_csv(file)
+            # Try UTF-8 first; fallback to latin-1 / ISO-8859-1 if UnicodeDecodeError occurs
+            try:
+                df = pd.read_csv(file, encoding="utf-8")
+            except (UnicodeDecodeError, Exception):
+                file.seek(0)
+                try:
+                    df = pd.read_csv(file, encoding="latin-1")
+                except Exception:
+                    file.seek(0)
+                    df = pd.read_csv(file, encoding="utf-8", on_bad_lines="skip", errors="replace")
             combined_text += df.to_string()
+            
         elif file.name.endswith(".txt"):
-            combined_text += file.read().decode("utf-8")
+            try:
+                combined_text += file.read().decode("utf-8")
+            except UnicodeDecodeError:
+                file.seek(0)
+                combined_text += file.read().decode("latin-1", errors="replace")
     return combined_text
 
 def format_docs(docs):
