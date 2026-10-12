@@ -1,4 +1,5 @@
 import os
+import time
 import streamlit as st
 from dotenv import load_dotenv
 from pypdf import PdfReader
@@ -87,11 +88,63 @@ if uploaded_files:
 
         # Vector Store Creation
         if "vector_store" not in st.session_state or st.button("Re-index Documents"):
-            with st.spinner("Building local FAISS vector storage..."):
-                embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
-                vector_store = FAISS.from_texts(chunks, embedding=embeddings)
-                st.session_state.vector_store = vector_store
-                st.success("FAISS vector storage successfully updated!")
+            embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
+
+            # ---------------------------------------------------------------
+            # Rate-limit-aware batched indexing
+            # Free tier quota: 100 embed requests / minute for gemini-embedding-001.
+            # We use batches of 80 chunks with a 65-second cooldown between
+            # batches to stay safely under the limit.
+            # ---------------------------------------------------------------
+            EMBED_BATCH_SIZE = 80          # chunks per API call (< 100 free-tier limit)
+            RATE_LIMIT_WAIT  = 65          # seconds to pause between batches
+
+            total_chunks  = len(chunks)
+            num_batches   = (total_chunks + EMBED_BATCH_SIZE - 1) // EMBED_BATCH_SIZE
+
+            st.info(
+                f"⏳ Indexing **{total_chunks} chunks** in **{num_batches} batch(es)** "
+                f"of {EMBED_BATCH_SIZE}. A {RATE_LIMIT_WAIT}s cooldown is applied between "
+                f"batches to respect the free-tier rate limit."
+            )
+
+            progress_bar   = st.progress(0, text="Starting indexing…")
+            vector_store   = None
+
+            for batch_idx in range(num_batches):
+                start = batch_idx * EMBED_BATCH_SIZE
+                end   = min(start + EMBED_BATCH_SIZE, total_chunks)
+                batch = chunks[start:end]
+
+                progress_pct  = int((batch_idx / num_batches) * 100)
+                progress_bar.progress(
+                    progress_pct,
+                    text=f"Embedding batch {batch_idx + 1}/{num_batches} "
+                         f"(chunks {start + 1}–{end})…"
+                )
+
+                if vector_store is None:
+                    # First batch: create the store
+                    vector_store = FAISS.from_texts(batch, embedding=embeddings)
+                else:
+                    # Subsequent batches: merge into existing store
+                    batch_store = FAISS.from_texts(batch, embedding=embeddings)
+                    vector_store.merge_from(batch_store)
+
+                # Pause between batches (skip cooldown after the last batch)
+                if batch_idx < num_batches - 1:
+                    for remaining in range(RATE_LIMIT_WAIT, 0, -1):
+                        progress_bar.progress(
+                            progress_pct,
+                            text=f"⏸ Rate-limit cooldown — resuming in {remaining}s… "
+                                 f"(batch {batch_idx + 1}/{num_batches} done)"
+                        )
+                        time.sleep(1)
+
+            progress_bar.progress(100, text="✅ All batches embedded successfully!")
+            st.session_state.vector_store = vector_store
+            st.success(f"✅ FAISS vector storage built from {total_chunks} chunks!")
+
 
         # Query Interface
         st.divider()
