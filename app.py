@@ -74,7 +74,8 @@ if uploaded_files:
         # Vector Store Creation
         if "vector_store" not in st.session_state or st.button("Re-index Documents"):
             with st.spinner("Building local FAISS vector storage..."):
-                embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
+                # GOOD: Clean model name without 'models/' prefix
+                embeddings = GoogleGenerativeAIEmbeddings(model="text-embedding-004")
                 vector_store = FAISS.from_texts(chunks, embedding=embeddings)
                 st.session_state.vector_store = vector_store
                 st.success("FAISS vector storage successfully updated!")
