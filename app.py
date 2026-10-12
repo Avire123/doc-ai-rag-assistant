@@ -4,10 +4,12 @@ from dotenv import load_dotenv
 from pypdf import PdfReader
 import pandas as pd
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain.chains import RetrievalQA
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 
 # Load environment variables
 load_dotenv()
@@ -19,7 +21,7 @@ st.set_page_config(
 )
 
 st.title("📄 Document AI & RAG Query Assistant")
-st.caption("Upload PDFs or CSVs, index them with local FAISS vector storage, and query your data with Gemini AI.")
+st.caption("Upload PDFs, CSVs, or TXT files, index them into local FAISS vector storage, and query your data with Gemini AI.")
 
 # Sidebar for API Key & File Upload
 with st.sidebar:
@@ -34,7 +36,7 @@ with st.sidebar:
         accept_multiple_files=True
     )
 
-# Function to extract text from files
+# Extract text from uploaded files
 def extract_text(files):
     combined_text = ""
     for file in files:
@@ -49,7 +51,11 @@ def extract_text(files):
             combined_text += file.read().decode("utf-8")
     return combined_text
 
-# Main workflow
+# Format retrieved documents into a single text block
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+# Main Workflow
 if uploaded_files:
     if not os.environ.get("GOOGLE_API_KEY"):
         st.warning("Please provide a Gemini API Key in the sidebar to proceed.")
@@ -57,7 +63,6 @@ if uploaded_files:
         with st.spinner("Extracting and chunking document text..."):
             raw_text = extract_text(uploaded_files)
             
-            # Chunking text
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000, 
                 chunk_overlap=200
@@ -66,7 +71,7 @@ if uploaded_files:
 
         st.success(f"Processed {len(uploaded_files)} file(s) into {len(chunks)} text chunks.")
 
-        # Create Vector Store
+        # Vector Store Creation
         if "vector_store" not in st.session_state or st.button("Re-index Documents"):
             with st.spinner("Building local FAISS vector storage..."):
                 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
@@ -81,26 +86,39 @@ if uploaded_files:
         user_query = st.text_input("Ask a question about your uploaded documents:")
 
         if user_query and "vector_store" in st.session_state:
-            with st.spinner("Retrieving relevant context and generating answer..."):
+            with st.spinner("Retrieving context and generating answer..."):
                 llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.2)
                 retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k": 3})
-                
-                # Retrieval QA Chain
-                qa_chain = RetrievalQA.from_chain_type(
-                    llm=llm,
-                    chain_type="stuff",
-                    retriever=retriever,
-                    return_source_documents=True
+
+                # Retrieve source documents first for citations
+                source_docs = retriever.invoke(user_query)
+
+                # RAG Prompt Template
+                prompt = ChatPromptTemplate.from_template(
+                    "You are an assistant for question-answering tasks.\n"
+                    "Use the following pieces of retrieved context to answer "
+                    "the question. If you don't know the answer, say that you "
+                    "don't know. Keep the answer concise.\n\n"
+                    "Context:\n{context}\n\n"
+                    "Question: {question}"
                 )
-                
-                response = qa_chain.invoke({"query": user_query})
+
+                # Pure LCEL Chain: Context + Query -> Prompt -> Model -> String Output
+                rag_chain = (
+                    {"context": lambda x: format_docs(source_docs), "question": RunnablePassthrough()}
+                    | prompt
+                    | llm
+                    | StrOutputParser()
+                )
+
+                answer = rag_chain.invoke(user_query)
 
                 st.subheader("Answer:")
-                st.write(response["result"])
+                st.write(answer)
 
                 # Source Citations
                 with st.expander("📚 View Retrieved Sources / Context Chunks"):
-                    for i, doc in enumerate(response["source_documents"]):
+                    for i, doc in enumerate(source_docs):
                         st.markdown(f"**Source Chunk {i+1}:**")
                         st.info(doc.page_content)
 else:
