@@ -11,8 +11,13 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
-# Load environment variables
+# Load local .env file if available
 load_dotenv()
+
+# Automatically fetch API Key from Streamlit Secrets or Environment
+api_key = st.secrets.get("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY")
+if api_key:
+    os.environ["GOOGLE_API_KEY"] = api_key
 
 st.set_page_config(
     page_title="Document AI & RAG Query Assistant",
@@ -23,13 +28,9 @@ st.set_page_config(
 st.title("📄 Document AI & RAG Query Assistant")
 st.caption("Upload PDFs, CSVs, or TXT files, index them into local FAISS vector storage, and query your data with Gemini AI.")
 
-# Sidebar for API Key & File Upload
+# Sidebar for File Upload Only
 with st.sidebar:
-    st.header("Configuration & Upload")
-    api_key = st.text_input("Enter Gemini API Key:", type="password")
-    if api_key:
-        os.environ["GOOGLE_API_KEY"] = api_key
-
+    st.header("Document Upload")
     uploaded_files = st.file_uploader(
         "Upload Documents (PDF, CSV, TXT)", 
         type=["pdf", "csv", "txt"], 
@@ -51,14 +52,13 @@ def extract_text(files):
             combined_text += file.read().decode("utf-8")
     return combined_text
 
-# Format retrieved documents into a single text block
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
 # Main Workflow
 if uploaded_files:
     if not os.environ.get("GOOGLE_API_KEY"):
-        st.warning("Please provide a Gemini API Key in the sidebar to proceed.")
+        st.error("Missing Gemini API Key! Please configure GOOGLE_API_KEY in Streamlit Secrets or .env file.")
     else:
         with st.spinner("Extracting and chunking document text..."):
             raw_text = extract_text(uploaded_files)
@@ -74,7 +74,6 @@ if uploaded_files:
         # Vector Store Creation
         if "vector_store" not in st.session_state or st.button("Re-index Documents"):
             with st.spinner("Building local FAISS vector storage..."):
-                # GOOD: Clean model name without 'models/' prefix
                 embeddings = GoogleGenerativeAIEmbeddings(model="text-embedding-004")
                 vector_store = FAISS.from_texts(chunks, embedding=embeddings)
                 st.session_state.vector_store = vector_store
@@ -91,10 +90,8 @@ if uploaded_files:
                 llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.2)
                 retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k": 3})
 
-                # Retrieve source documents first for citations
                 source_docs = retriever.invoke(user_query)
 
-                # RAG Prompt Template
                 prompt = ChatPromptTemplate.from_template(
                     "You are an assistant for question-answering tasks.\n"
                     "Use the following pieces of retrieved context to answer "
@@ -104,7 +101,6 @@ if uploaded_files:
                     "Question: {question}"
                 )
 
-                # Pure LCEL Chain: Context + Query -> Prompt -> Model -> String Output
                 rag_chain = (
                     {"context": lambda x: format_docs(source_docs), "question": RunnablePassthrough()}
                     | prompt
